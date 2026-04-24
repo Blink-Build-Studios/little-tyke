@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -59,6 +60,9 @@ func init() {
 
 	flags.Bool("fast", false, "use the smallest/fastest model")
 	_ = viper.BindPFlag("summarize_fast", flags.Lookup("fast"))
+
+	flags.Bool("json", false, "output raw JSON instead of formatted text")
+	_ = viper.BindPFlag("summarize_json", flags.Lookup("json"))
 }
 
 // --- API types ---
@@ -195,8 +199,8 @@ func run(ctx context.Context, filePath string) error {
 
 	handler := proxy.NewHandler(auditClient, modelTag,
 		proxy.WithKeepAlive("-1s"),
-		proxy.WithDefaultMaxTokens(4096),
-		proxy.WithNumCtx(4096),
+		proxy.WithDefaultMaxTokens(8192),
+		proxy.WithNumCtx(32768),
 	)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +231,13 @@ func run(ctx context.Context, filePath string) error {
 
 	elapsed := time.Since(start)
 
-	printSummary(summary)
+	if viper.GetBool("summarize_json") {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(summary)
+	} else {
+		printSummary(summary)
+	}
 	fmt.Fprintf(os.Stderr, "\n  %s%.1fs%s\n\n", colorDim, elapsed.Seconds(), colorReset)
 
 	return nil
@@ -429,6 +439,11 @@ func executeToolCall(tc toolCall) string {
 		return fmt.Sprintf("invalid arguments: %v", err)
 	}
 
+	// PDF files need text extraction — raw bytes are binary gibberish to the model
+	if strings.EqualFold(filepath.Ext(args.Path), ".pdf") {
+		return extractPDF(args.Path)
+	}
+
 	data, err := os.ReadFile(args.Path)
 	if err != nil {
 		return fmt.Sprintf("error reading file: %v", err)
@@ -441,6 +456,23 @@ func executeToolCall(tc toolCall) string {
 	}
 
 	return string(data)
+}
+
+func extractPDF(path string) string {
+	cmd := exec.Command("pdftotext", path, "-")
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Sprintf("error extracting PDF text (is pdftotext installed?): %v", err)
+	}
+
+	text := string(out)
+
+	const maxBytes = 50 * 1024
+	if len(text) > maxBytes {
+		return text[:maxBytes] + "\n\n[truncated — extracted text exceeds 50KB]"
+	}
+
+	return text
 }
 
 func extractPath(argsJSON string) string {

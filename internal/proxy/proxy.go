@@ -319,6 +319,15 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Chat
 
 // toOllamaRequest converts an OpenAI request to Ollama format.
 func (h *Handler) toOllamaRequest(req *ChatCompletionRequest) *ollama.ChatRequest {
+	// Build a map from OpenAI tool_call_id to function name so we can
+	// translate tool-result messages to Ollama's tool_name format.
+	toolCallNames := map[string]string{}
+	for _, m := range req.Messages {
+		for _, tc := range m.ToolCalls {
+			toolCallNames[tc.ID] = tc.Function.Name
+		}
+	}
+
 	var messages []ollama.ChatMessage
 	for _, m := range req.Messages {
 		content := ""
@@ -337,10 +346,26 @@ func (h *Handler) toOllamaRequest(req *ChatCompletionRequest) *ollama.ChatReques
 				}
 			}
 		}
-		messages = append(messages, ollama.ChatMessage{
+		msg := ollama.ChatMessage{
 			Role:    m.Role,
 			Content: content,
-		})
+		}
+		// Carry through assistant tool calls
+		for _, tc := range m.ToolCalls {
+			var args map[string]any
+			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			msg.ToolCalls = append(msg.ToolCalls, ollama.ToolCall{
+				Function: ollama.ToolCallFunction{
+					Name:      tc.Function.Name,
+					Arguments: args,
+				},
+			})
+		}
+		// Translate OpenAI tool_call_id to Ollama tool_name
+		if m.Role == "tool" && m.ToolCallID != "" {
+			msg.ToolName = toolCallNames[m.ToolCallID]
+		}
+		messages = append(messages, msg)
 	}
 
 	ollamaReq := &ollama.ChatRequest{

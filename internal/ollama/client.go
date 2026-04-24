@@ -166,6 +166,7 @@ type ChatMessage struct {
 	Role      string     `json:"role"`
 	Content   string     `json:"content"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	ToolName  string     `json:"tool_name,omitempty"`
 }
 
 // ToolCall represents a tool/function call from the model.
