@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/Blink-Build-Studios/little-tyke/internal/audit"
 	"github.com/Blink-Build-Studios/little-tyke/internal/hardware"
 	"github.com/Blink-Build-Studios/little-tyke/internal/logging"
 	"github.com/Blink-Build-Studios/little-tyke/internal/ollama"
@@ -169,7 +170,10 @@ func run(ctx context.Context) error {
 	}
 	addr := listener.Addr().String()
 
-	handler := proxy.NewHandler(client, modelTag,
+	auditLogger, _ := audit.New(audit.DefaultConfig())
+	auditClient := audit.NewClient(client, auditLogger)
+
+	handler := proxy.NewHandler(auditClient, modelTag,
 		proxy.WithKeepAlive("-1s"),
 		proxy.WithDefaultMaxTokens(2048),
 		proxy.WithNumCtx(4096),
@@ -285,6 +289,7 @@ func run(ctx context.Context) error {
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Request-ID", "chat-repl")
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

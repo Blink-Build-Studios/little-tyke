@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/Blink-Build-Studios/little-tyke/internal/audit"
 	"github.com/Blink-Build-Studios/little-tyke/internal/hardware"
 	"github.com/Blink-Build-Studios/little-tyke/internal/logging"
 	"github.com/Blink-Build-Studios/little-tyke/internal/monitoring"
@@ -69,6 +70,22 @@ func init() {
 
 	flags.Int("num-ctx", 4096, "context window size (0 = model default)")
 	_ = viper.BindPFlag("num_ctx", flags.Lookup("num-ctx"))
+
+	defaults := audit.DefaultConfig()
+	flags.Bool("audit-enabled", defaults.Enabled, "enable request/response audit logging")
+	_ = viper.BindPFlag("audit_enabled", flags.Lookup("audit-enabled"))
+
+	flags.String("audit-log-dir", defaults.Dir, "audit log directory")
+	_ = viper.BindPFlag("audit_log_dir", flags.Lookup("audit-log-dir"))
+
+	flags.Int("audit-max-size", defaults.MaxSizeMB, "max audit log file size in MB before rotation")
+	_ = viper.BindPFlag("audit_max_size", flags.Lookup("audit-max-size"))
+
+	flags.Int("audit-max-age", defaults.MaxAgeDays, "max days to retain audit logs")
+	_ = viper.BindPFlag("audit_max_age", flags.Lookup("audit-max-age"))
+
+	flags.Int("audit-max-backups", defaults.MaxBackups, "max rotated audit log files to keep")
+	_ = viper.BindPFlag("audit_max_backups", flags.Lookup("audit-max-backups"))
 }
 
 func run(ctx context.Context) error {
@@ -157,6 +174,21 @@ func run(ctx context.Context) error {
 		}()
 	}
 
+	// --- Audit logging ---
+	auditLogger, err := audit.New(audit.Config{
+		Enabled:    viper.GetBool("audit_enabled"),
+		Dir:        viper.GetString("audit_log_dir"),
+		MaxSizeMB:  viper.GetInt("audit_max_size"),
+		MaxAgeDays: viper.GetInt("audit_max_age"),
+		MaxBackups: viper.GetInt("audit_max_backups"),
+	})
+	if err != nil {
+		log.WithError(err).Warn("failed to initialize audit logging")
+	} else if viper.GetBool("audit_enabled") {
+		log.WithField("dir", viper.GetString("audit_log_dir")).Info("audit logging enabled")
+	}
+	auditClient := audit.NewClient(client, auditLogger)
+
 	// --- HTTP server ---
 	addr := viper.GetString("addr")
 
@@ -170,14 +202,21 @@ func run(ctx context.Context) error {
 	if nc := viper.GetInt("num_ctx"); nc > 0 {
 		handlerOpts = append(handlerOpts, proxy.WithNumCtx(nc))
 	}
-	handler := proxy.NewHandler(client, modelTag, handlerOpts...)
+	handler := proxy.NewHandler(auditClient, modelTag, handlerOpts...)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"status":"ok","model":"%s"}`, modelTag)
 	})
-	mux.HandleFunc("/v1/chat/completions", handler.ServeHTTP)
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		caller := r.Header.Get("X-Request-ID")
+		if caller == "" {
+			caller = r.RemoteAddr
+		}
+		ctx := audit.WithCaller(r.Context(), caller)
+		handler.ServeHTTP(w, r.WithContext(ctx))
+	})
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"object":"list","data":[{"id":"%s","object":"model","owned_by":"google"}]}`, modelTag)

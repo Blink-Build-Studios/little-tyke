@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,9 +15,15 @@ import (
 	"github.com/Blink-Build-Studios/little-tyke/internal/ollama"
 )
 
+// ChatClient is the interface for sending chat requests to Ollama.
+type ChatClient interface {
+	Chat(ctx context.Context, req *ollama.ChatRequest) (*ollama.ChatResponse, error)
+	ChatStream(ctx context.Context, req *ollama.ChatRequest, onChunk func(*ollama.ChatResponse) error) error
+}
+
 // Handler serves OpenAI-compatible /v1/chat/completions requests.
 type Handler struct {
-	client          *ollama.Client
+	client          ChatClient
 	model           string
 	keepAlive       string
 	defaultMaxToks  int
@@ -36,7 +43,7 @@ func WithDefaultMaxTokens(n int) HandlerOption { return func(h *Handler) { h.def
 func WithNumCtx(n int) HandlerOption { return func(h *Handler) { h.numCtx = n } }
 
 // NewHandler creates a proxy handler for the given model.
-func NewHandler(client *ollama.Client, model string, opts ...HandlerOption) *Handler {
+func NewHandler(client ChatClient, model string, opts ...HandlerOption) *Handler {
 	h := &Handler{client: client, model: model}
 	for _, opt := range opts {
 		opt(h)

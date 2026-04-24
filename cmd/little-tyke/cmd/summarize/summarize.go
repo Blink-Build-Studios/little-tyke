@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/Blink-Build-Studios/little-tyke/internal/audit"
 	"github.com/Blink-Build-Studios/little-tyke/internal/hardware"
 	"github.com/Blink-Build-Studios/little-tyke/internal/logging"
 	"github.com/Blink-Build-Studios/little-tyke/internal/ollama"
@@ -189,13 +190,19 @@ func run(ctx context.Context, filePath string) error {
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	handler := proxy.NewHandler(client, modelTag,
+	auditLogger, _ := audit.New(audit.DefaultConfig())
+	auditClient := audit.NewClient(client, auditLogger)
+
+	handler := proxy.NewHandler(auditClient, modelTag,
 		proxy.WithKeepAlive("-1s"),
 		proxy.WithDefaultMaxTokens(4096),
 		proxy.WithNumCtx(4096),
 	)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/chat/completions", handler.ServeHTTP)
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		ctx := audit.WithCaller(r.Context(), "summarize")
+		handler.ServeHTTP(w, r.WithContext(ctx))
+	})
 	srv := &http.Server{Handler: mux}
 	go func() {
 		if err := srv.Serve(listener); err != http.ErrServerClosed {
