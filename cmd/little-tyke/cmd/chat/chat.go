@@ -200,32 +200,35 @@ func run(ctx context.Context) error {
 			continue
 		}
 
-		fmt.Print("assistant> ")
+		fmt.Print("(thinking...) ")
 		var full strings.Builder
+		firstToken := true
 
-		reader := bufio.NewReader(resp.Body)
-		for {
-			line, err := reader.ReadString('\n')
-			line = strings.TrimSpace(line)
-
-			if strings.HasPrefix(line, "data: ") {
-				data := strings.TrimPrefix(line, "data: ")
-				if data == "[DONE]" {
-					break
-				}
-				var chunk streamChunk
-				if json.Unmarshal([]byte(data), &chunk) == nil && len(chunk.Choices) > 0 {
-					text := chunk.Choices[0].Delta.Content
-					fmt.Print(text)
-					full.WriteString(text)
-				}
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if !strings.HasPrefix(line, "data: ") {
+				continue
 			}
-
-			if err != nil {
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
 				break
+			}
+			var chunk streamChunk
+			if json.Unmarshal([]byte(data), &chunk) == nil && len(chunk.Choices) > 0 {
+				text := chunk.Choices[0].Delta.Content
+				if text != "" && firstToken {
+					fmt.Print("\rassistant> ")
+					firstToken = false
+				}
+				fmt.Print(text)
+				full.WriteString(text)
 			}
 		}
 		_ = resp.Body.Close()
+		if firstToken {
+			fmt.Print("\rassistant> ")
+		}
 		fmt.Println()
 
 		history = append(history, message{Role: "assistant", Content: full.String()})
