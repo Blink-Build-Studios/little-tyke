@@ -2,11 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
-
-	log "github.com/sirupsen/logrus"
 
 	"github.com/Blink-Build-Studios/little-tyke/cmd/little-tyke/cmd"
 )
@@ -16,7 +15,7 @@ func main() {
 	defer cancel()
 
 	if err := cmd.RootCmd.ExecuteContext(ctx); err != nil {
-		log.WithError(err).Fatal("fatal error")
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }
