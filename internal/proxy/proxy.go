@@ -163,13 +163,18 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *C
 	elapsed := time.Since(start)
 	monitoring.RequestsTotal.WithLabelValues("POST", "/v1/chat/completions", "200").Inc()
 	monitoring.RequestDuration.WithLabelValues("POST", "/v1/chat/completions").Observe(elapsed.Seconds())
+	recordOllamaMetrics(resp)
 
 	log.WithFields(log.Fields{
-		"model":             h.model,
-		"prompt_tokens":     resp.PromptEvalCount,
-		"completion_tokens": resp.EvalCount,
-		"duration_ms":       elapsed.Milliseconds(),
-		"tokens_per_sec":    tokensPerSec(resp.EvalCount, resp.EvalDuration),
+		"model":               h.model,
+		"prompt_tokens":       resp.PromptEvalCount,
+		"completion_tokens":   resp.EvalCount,
+		"duration_ms":         elapsed.Milliseconds(),
+		"load_ms":             resp.LoadDuration / 1e6,
+		"prompt_eval_ms":      resp.PromptEvalDuration / 1e6,
+		"generation_ms":       resp.EvalDuration / 1e6,
+		"prompt_tok_per_sec":  tokensPerSec(resp.PromptEvalCount, resp.PromptEvalDuration),
+		"gen_tok_per_sec":     tokensPerSec(resp.EvalCount, resp.EvalDuration),
 	}).Info("chat completion")
 }
 
@@ -189,6 +194,8 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Chat
 	chatID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 	created := time.Now().Unix()
 	firstChunk := true
+	var firstTokenTime time.Time
+	var finalChunk *ollama.ChatResponse
 
 	err := h.client.ChatStream(r.Context(), ollamaReq, func(chunk *ollama.ChatResponse) error {
 		oaiChunk := ChatCompletionChunk{
@@ -209,12 +216,14 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Chat
 		if firstChunk {
 			oaiChunk.Choices[0].Delta.Role = "assistant"
 			firstChunk = false
+			firstTokenTime = time.Now()
 		}
 
 		if chunk.Done {
 			stop := "stop"
 			oaiChunk.Choices[0].FinishReason = &stop
 			oaiChunk.Choices[0].Delta.Content = ""
+			finalChunk = chunk
 		}
 
 		data, _ := json.Marshal(oaiChunk)
@@ -239,11 +248,32 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Chat
 	monitoring.RequestsTotal.WithLabelValues("POST", "/v1/chat/completions", "200").Inc()
 	monitoring.RequestDuration.WithLabelValues("POST", "/v1/chat/completions").Observe(elapsed.Seconds())
 
-	log.WithFields(log.Fields{
+	if !firstTokenTime.IsZero() {
+		ttft := firstTokenTime.Sub(start).Seconds()
+		monitoring.TimeToFirstToken.Observe(ttft)
+	}
+
+	logFields := log.Fields{
 		"model":       h.model,
 		"duration_ms": elapsed.Milliseconds(),
 		"stream":      true,
-	}).Info("chat completion (stream)")
+	}
+
+	if finalChunk != nil {
+		recordOllamaMetrics(finalChunk)
+		logFields["prompt_tokens"] = finalChunk.PromptEvalCount
+		logFields["completion_tokens"] = finalChunk.EvalCount
+		logFields["load_ms"] = finalChunk.LoadDuration / 1e6
+		logFields["prompt_eval_ms"] = finalChunk.PromptEvalDuration / 1e6
+		logFields["generation_ms"] = finalChunk.EvalDuration / 1e6
+		logFields["prompt_tok_per_sec"] = tokensPerSec(finalChunk.PromptEvalCount, finalChunk.PromptEvalDuration)
+		logFields["gen_tok_per_sec"] = tokensPerSec(finalChunk.EvalCount, finalChunk.EvalDuration)
+		if !firstTokenTime.IsZero() {
+			logFields["ttft_ms"] = firstTokenTime.Sub(start).Milliseconds()
+		}
+	}
+
+	log.WithFields(logFields).Info("chat completion (stream)")
 }
 
 // toOllamaRequest converts an OpenAI request to Ollama format.
@@ -364,9 +394,40 @@ func writeError(w http.ResponseWriter, status int, errType, message string) {
 	})
 }
 
+func nanosToSec(ns int64) float64 {
+	return float64(ns) / 1e9
+}
+
 func tokensPerSec(count int, durationNanos int64) float64 {
 	if durationNanos == 0 {
 		return 0
 	}
-	return float64(count) / (float64(durationNanos) / 1e9)
+	return float64(count) / nanosToSec(durationNanos)
+}
+
+func recordOllamaMetrics(resp *ollama.ChatResponse) {
+	if resp.TotalDuration > 0 {
+		monitoring.TotalInferenceDuration.Observe(nanosToSec(resp.TotalDuration))
+	}
+	if resp.LoadDuration > 0 {
+		monitoring.ModelLoadDuration.Observe(nanosToSec(resp.LoadDuration))
+	}
+	if resp.PromptEvalDuration > 0 {
+		monitoring.PromptEvalDuration.Observe(nanosToSec(resp.PromptEvalDuration))
+		if resp.PromptEvalCount > 0 {
+			monitoring.PromptTokensPerSecond.Observe(tokensPerSec(resp.PromptEvalCount, resp.PromptEvalDuration))
+		}
+	}
+	if resp.EvalDuration > 0 {
+		monitoring.GenerationDuration.Observe(nanosToSec(resp.EvalDuration))
+		if resp.EvalCount > 0 {
+			monitoring.GenerationTokensPerSecond.Observe(tokensPerSec(resp.EvalCount, resp.EvalDuration))
+		}
+	}
+	if resp.PromptEvalCount > 0 {
+		monitoring.PromptTokensTotal.Add(float64(resp.PromptEvalCount))
+	}
+	if resp.EvalCount > 0 {
+		monitoring.GeneratedTokensTotal.Add(float64(resp.EvalCount))
+	}
 }
