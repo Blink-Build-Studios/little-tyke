@@ -118,6 +118,14 @@ func run(ctx context.Context) error {
 		log.WithField("model", modelTag).Info("model already available locally")
 	}
 
+	// --- Warm model into GPU memory ---
+	log.WithField("model", modelTag).Info("warming model (loading into GPU memory)...")
+	if err := client.WarmModel(ctx, modelTag); err != nil {
+		log.WithError(err).Warn("model warmup failed (first request may be slow)")
+	} else {
+		log.WithField("model", modelTag).Info("model warm and ready")
+	}
+
 	// --- Prometheus ---
 	if viper.GetBool("prometheus_enabled") {
 		wg.Add(1)

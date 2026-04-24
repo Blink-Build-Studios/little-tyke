@@ -103,6 +103,13 @@ func run(ctx context.Context) error {
 		fmt.Println("Pull complete.")
 	}
 
+	fmt.Print("Loading model into GPU memory... ")
+	if err := client.WarmModel(ctx, modelTag); err != nil {
+		fmt.Println("failed (first message may be slow)")
+	} else {
+		fmt.Println("ready")
+	}
+
 	// Start the HTTP server on a random port
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

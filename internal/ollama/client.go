@@ -200,6 +200,18 @@ type ChatResponse struct {
 	EvalDuration       int64 `json:"eval_duration"`
 }
 
+// WarmModel forces Ollama to load the model into memory by sending a minimal request.
+func (c *Client) WarmModel(ctx context.Context, model string) error {
+	_, err := c.Chat(ctx, &ChatRequest{
+		Model:    model,
+		Messages: []ChatMessage{{Role: "user", Content: "hi"}},
+		Options:  &Options{NumPredict: intPtr(1)},
+	})
+	return err
+}
+
+func intPtr(v int) *int { return &v }
+
 // Chat sends a non-streaming chat request to Ollama.
 func (c *Client) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	req.Stream = false
