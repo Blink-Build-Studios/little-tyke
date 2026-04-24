@@ -1,0 +1,11 @@
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+.env
+.env.*
+*.pem
+*.key
