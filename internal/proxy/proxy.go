@@ -48,14 +48,29 @@ func NewHandler(client *ollama.Client, model string, opts ...HandlerOption) *Han
 
 // ChatCompletionRequest matches the OpenAI chat completion request format.
 type ChatCompletionRequest struct {
-	Model       string          `json:"model"`
-	Messages    []Message       `json:"messages"`
-	Temperature *float64        `json:"temperature,omitempty"`
-	TopP        *float64        `json:"top_p,omitempty"`
-	MaxTokens   *int            `json:"max_tokens,omitempty"`
-	Stop        any             `json:"stop,omitempty"`
-	Stream      bool            `json:"stream"`
-	Tools       []Tool          `json:"tools,omitempty"`
+	Model          string          `json:"model"`
+	Messages       []Message       `json:"messages"`
+	Temperature    *float64        `json:"temperature,omitempty"`
+	TopP           *float64        `json:"top_p,omitempty"`
+	MaxTokens      *int            `json:"max_tokens,omitempty"`
+	Stop           any             `json:"stop,omitempty"`
+	Stream         bool            `json:"stream"`
+	Tools          []Tool          `json:"tools,omitempty"`
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+}
+
+// ResponseFormat controls the output format of the model.
+type ResponseFormat struct {
+	Type       string      `json:"type"`                  // "text", "json_object", or "json_schema"
+	JSONSchema *JSONSchema `json:"json_schema,omitempty"` // required when type is "json_schema"
+}
+
+// JSONSchema defines a structured output schema.
+type JSONSchema struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Schema      any    `json:"schema"`
+	Strict      *bool  `json:"strict,omitempty"`
 }
 
 // Message is an OpenAI-format chat message.
@@ -325,6 +340,19 @@ func (h *Handler) toOllamaRequest(req *ChatCompletionRequest) *ollama.ChatReques
 		Model:     h.model,
 		Messages:  messages,
 		KeepAlive: h.keepAlive,
+	}
+
+	// Map response_format to Ollama's format field
+	if req.ResponseFormat != nil {
+		switch req.ResponseFormat.Type {
+		case "json_object":
+			ollamaReq.Format = "json"
+		case "json_schema":
+			if req.ResponseFormat.JSONSchema != nil {
+				ollamaReq.Format = req.ResponseFormat.JSONSchema.Schema
+			}
+		}
+		// "text" is the default — no format field needed
 	}
 
 	if req.Tools != nil {
