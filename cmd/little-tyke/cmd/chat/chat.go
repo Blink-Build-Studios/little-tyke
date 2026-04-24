@@ -154,7 +154,7 @@ func run(ctx context.Context) error {
 	addr := listener.Addr().String()
 
 	handler := proxy.NewHandler(client, modelTag,
-		proxy.WithKeepAlive("-1"),
+		proxy.WithKeepAlive("-1s"),
 		proxy.WithDefaultMaxTokens(2048),
 		proxy.WithNumCtx(4096),
 	)
