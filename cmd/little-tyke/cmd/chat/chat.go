@@ -66,6 +66,9 @@ func init() {
 
 	flags.Int("history", maxHistoryTurns, "max conversation turns to keep (0 = unlimited)")
 	_ = viper.BindPFlag("chat_history", flags.Lookup("history"))
+
+	flags.Bool("cot", false, "enforce chain-of-thought structured JSON output")
+	_ = viper.BindPFlag("chat_cot", flags.Lookup("cot"))
 }
 
 type message struct {
@@ -74,9 +77,21 @@ type message struct {
 }
 
 type chatRequest struct {
-	Model    string    `json:"model"`
-	Messages []message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model          string          `json:"model"`
+	Messages       []message       `json:"messages"`
+	Stream         bool            `json:"stream"`
+	ResponseFormat *responseFormat `json:"response_format,omitempty"`
+}
+
+type responseFormat struct {
+	Type       string      `json:"type"`
+	JSONSchema *jsonSchema `json:"json_schema,omitempty"`
+}
+
+type jsonSchema struct {
+	Name   string `json:"name"`
+	Schema any    `json:"schema"`
+	Strict *bool  `json:"strict,omitempty"`
 }
 
 type delta struct {
@@ -100,6 +115,7 @@ func run(ctx context.Context) error {
 	ollamaURL := viper.GetString("ollama_url")
 	client := ollama.NewClient(ollamaURL)
 	maxTurns := viper.GetInt("chat_history")
+	cotMode := viper.GetBool("chat_cot")
 
 	fmt.Println()
 	fmt.Printf("  %s%slittle-tyke%s\n", colorBold, colorCyan, colorReset)
@@ -180,6 +196,9 @@ func run(ctx context.Context) error {
 	if maxTurns > 0 {
 		fmt.Printf("  %sHistory: last %d turns%s\n", colorDim, maxTurns, colorReset)
 	}
+	if cotMode {
+		fmt.Printf("  %sMode: chain-of-thought (structured JSON)%s\n", colorDim, colorReset)
+	}
 	fmt.Printf("  %s─────────────────────────────────%s\n", colorDim, colorReset)
 	fmt.Println()
 
@@ -188,10 +207,41 @@ func run(ctx context.Context) error {
 
 	sys := viper.GetString("chat_system")
 	if sys == "" {
-		sys = "Be concise and direct. Avoid filler words and unnecessary preamble."
+		if cotMode {
+			sys = "Think step by step. Always respond with valid JSON matching the required schema. Put your reasoning in the \"thinking\" field and your final answer in the \"response\" field."
+		} else {
+			sys = "Be concise and direct. Avoid filler words and unnecessary preamble."
+		}
 	}
 	sm := message{Role: "system", Content: sys}
 	systemMsg = &sm
+
+	var cotFormat *responseFormat
+	if cotMode {
+		t := true
+		cotFormat = &responseFormat{
+			Type: "json_schema",
+			JSONSchema: &jsonSchema{
+				Name:   "cot_response",
+				Strict: &t,
+				Schema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"thinking": map[string]any{
+							"type":        "string",
+							"description": "Step-by-step reasoning process",
+						},
+						"response": map[string]any{
+							"type":        "string",
+							"description": "Final answer to the user",
+						},
+					},
+					"required":             []string{"thinking", "response"},
+					"additionalProperties": false,
+				},
+			},
+		}
+	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -220,11 +270,13 @@ func run(ctx context.Context) error {
 		// Sliding window: keep system prompt + last N turns (1 turn = user + assistant)
 		sendMessages := trimHistory(systemMsg, history, maxTurns)
 
-		reqBody, _ := json.Marshal(chatRequest{
-			Model:    modelTag,
-			Messages: sendMessages,
-			Stream:   true,
-		})
+		cr := chatRequest{
+			Model:          modelTag,
+			Messages:       sendMessages,
+			Stream:         !cotMode,
+			ResponseFormat: cotFormat,
+		}
+		reqBody, _ := json.Marshal(cr)
 
 		req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/v1/chat/completions", bytes.NewReader(reqBody))
 		if err != nil {
@@ -249,46 +301,96 @@ func run(ctx context.Context) error {
 			continue
 		}
 
-		fmt.Printf("  %s%sthinking...%s", colorDim, colorYellow, colorReset)
-		var full strings.Builder
-		firstToken := true
 		start := time.Now()
+		var fullContent string
 
-		sseScanner := bufio.NewScanner(resp.Body)
-		for sseScanner.Scan() {
-			line := strings.TrimSpace(sseScanner.Text())
-			if !strings.HasPrefix(line, "data: ") {
-				continue
-			}
-			data := strings.TrimPrefix(line, "data: ")
-			if data == "[DONE]" {
-				break
-			}
-			var chunk streamChunk
-			if json.Unmarshal([]byte(data), &chunk) == nil && len(chunk.Choices) > 0 {
-				text := chunk.Choices[0].Delta.Content
-				if text != "" && firstToken {
-					// Clear "thinking..." and print prompt
-					fmt.Printf("\r  %s%s  >%s ", colorBold, colorBlue, colorReset)
-					firstToken = false
-				}
-				fmt.Print(text)
-				full.WriteString(text)
-			}
+		if cotMode {
+			fullContent = handleCoTResponse(resp)
+		} else {
+			fullContent = handleStreamResponse(resp)
 		}
-		_ = resp.Body.Close()
+
 		elapsed := time.Since(start)
-
-		if firstToken {
-			fmt.Printf("\r  %s%s  >%s ", colorBold, colorBlue, colorReset)
-		}
-		fmt.Println()
 		fmt.Printf("  %s%.1fs%s\n\n", colorDim, elapsed.Seconds(), colorReset)
 
-		history = append(history, message{Role: "assistant", Content: full.String()})
+		history = append(history, message{Role: "assistant", Content: fullContent})
 	}
 
 	return nil
+}
+
+func handleStreamResponse(resp *http.Response) string {
+	fmt.Printf("  %s%sthinking...%s", colorDim, colorYellow, colorReset)
+	var full strings.Builder
+	firstToken := true
+
+	sseScanner := bufio.NewScanner(resp.Body)
+	for sseScanner.Scan() {
+		line := strings.TrimSpace(sseScanner.Text())
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+		var chunk streamChunk
+		if json.Unmarshal([]byte(data), &chunk) == nil && len(chunk.Choices) > 0 {
+			text := chunk.Choices[0].Delta.Content
+			if text != "" && firstToken {
+				fmt.Printf("\r  %s%s  >%s ", colorBold, colorBlue, colorReset)
+				firstToken = false
+			}
+			fmt.Print(text)
+			full.WriteString(text)
+		}
+	}
+	_ = resp.Body.Close()
+	if firstToken {
+		fmt.Printf("\r  %s%s  >%s ", colorBold, colorBlue, colorReset)
+	}
+	fmt.Println()
+	return full.String()
+}
+
+type nonStreamResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
+type cotResponse struct {
+	Thinking string `json:"thinking"`
+	Response string `json:"response"`
+}
+
+func handleCoTResponse(resp *http.Response) string {
+	fmt.Printf("  %s%sthinking...%s", colorDim, colorYellow, colorReset)
+
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+
+	var apiResp nonStreamResponse
+	if err := json.Unmarshal(body, &apiResp); err != nil || len(apiResp.Choices) == 0 {
+		fmt.Printf("\r  %s%serror parsing response%s\n", colorBold, colorRed, colorReset)
+		return ""
+	}
+
+	content := apiResp.Choices[0].Message.Content
+
+	var cot cotResponse
+	if err := json.Unmarshal([]byte(content), &cot); err != nil {
+		// Model returned something but not valid CoT JSON — show raw
+		fmt.Printf("\r  %s%s  >%s %s\n", colorBold, colorBlue, colorReset, content)
+		return content
+	}
+
+	// Pretty print
+	fmt.Printf("\r  %s%sthinking:%s %s%s%s\n", colorDim, colorYellow, colorReset, colorDim, cot.Thinking, colorReset)
+	fmt.Printf("  %s%s  >%s %s\n", colorBold, colorBlue, colorReset, cot.Response)
+	return content
 }
 
 // trimHistory returns messages to send: system prompt (if any) + last maxTurns*2 messages.
