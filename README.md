@@ -49,6 +49,32 @@ All flags can be set via environment variables with `LITTLE_TYKE_` prefix.
 | `--prometheus-enabled` | `LITTLE_TYKE_PROMETHEUS_ENABLED` | `true` | Enable metrics |
 | `--prometheus-addr` | `LITTLE_TYKE_PROMETHEUS_ADDR` | `:9001` | Metrics listen address |
 
+## Summarize
+
+Summarize documents using tool calling and structured output. Supports PDF files (requires `pdftotext` from poppler) and plain text files.
+
+```bash
+# Summarize a PDF
+make summarize ARGS="~/Documents/report.pdf"
+
+# Use the smallest model for faster results
+make summarize ARGS="--fast ~/Documents/report.pdf"
+
+# Output raw JSON instead of formatted text
+make summarize ARGS="--json ~/Documents/report.pdf"
+
+# Combine flags
+make summarize ARGS="--fast --json ~/Documents/report.pdf"
+```
+
+### Dependencies
+
+PDF support requires `pdftotext`:
+
+```bash
+brew install poppler
+```
+
 ## Docker
 
 The Go server can run in Docker, but Ollama must run on the host for Metal GPU acceleration.
