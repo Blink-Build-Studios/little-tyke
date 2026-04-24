@@ -3,30 +3,46 @@ package chat
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"github.com/Blink-Build-Studios/little-tyke/internal/hardware"
+	"github.com/Blink-Build-Studios/little-tyke/internal/logging"
+	"github.com/Blink-Build-Studios/little-tyke/internal/ollama"
+	"github.com/Blink-Build-Studios/little-tyke/internal/proxy"
 )
 
 var Cmd = &cobra.Command{
 	Use:   "chat",
-	Short: "Interactive chat REPL (hits the local HTTP API end-to-end)",
+	Short: "Interactive chat REPL (starts the server in-process and tests end-to-end)",
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		logging.Setup(map[string]string{"service": "little-tyke"})
+		return logging.SetLevel("warn")
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return run()
+		return run(cmd.Context())
 	},
 }
 
 func init() {
 	flags := Cmd.Flags()
 
-	flags.String("url", "http://localhost:8081", "little-tyke API base URL")
-	_ = viper.BindPFlag("chat_url", flags.Lookup("url"))
+	flags.String("ollama-url", "http://localhost:11434", "Ollama API base URL")
+	_ = viper.BindPFlag("ollama_url", flags.Lookup("ollama-url"))
+
+	flags.String("model", "", "override model tag")
+	_ = viper.BindPFlag("model", flags.Lookup("model"))
 
 	flags.String("system", "", "system prompt")
 	_ = viper.BindPFlag("chat_system", flags.Lookup("system"))
@@ -56,17 +72,63 @@ type streamChunk struct {
 	Choices []choice `json:"choices"`
 }
 
-func run() error {
-	baseURL := viper.GetString("chat_url")
+func run(ctx context.Context) error {
+	ollamaURL := viper.GetString("ollama_url")
+	client := ollama.NewClient(ollamaURL)
 
-	// Quick health check
-	resp, err := http.Get(baseURL + "/healthz")
-	if err != nil {
-		return fmt.Errorf("cannot reach little-tyke at %s — is the server running? (make run): %w", baseURL, err)
+	fmt.Print("Connecting to Ollama... ")
+	if err := client.Ping(ctx); err != nil {
+		fmt.Println("failed")
+		return fmt.Errorf("cannot reach Ollama at %s — is it running? (brew install ollama && ollama serve): %w", ollamaURL, err)
 	}
-	_ = resp.Body.Close()
+	fmt.Println("ok")
 
-	fmt.Printf("Connected to %s\n", baseURL)
+	modelTag := viper.GetString("model")
+	if modelTag == "" {
+		info := hardware.Detect()
+		sel := hardware.SelectModel(info)
+		modelTag = sel.Tag
+		fmt.Printf("Auto-selected model: %s (%s)\n", sel.DisplayName, sel.Reason)
+	}
+
+	has, err := client.HasModel(ctx, modelTag)
+	if err != nil {
+		return fmt.Errorf("checking model: %w", err)
+	}
+	if !has {
+		fmt.Printf("Pulling %s (this may take a while)...\n", modelTag)
+		if err := client.PullModel(ctx, modelTag); err != nil {
+			return fmt.Errorf("pulling model: %w", err)
+		}
+		fmt.Println("Pull complete.")
+	}
+
+	// Start the HTTP server on a random port
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	addr := listener.Addr().String()
+
+	handler := proxy.NewHandler(client, modelTag)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/chat/completions", handler.ServeHTTP)
+	srv := &http.Server{Handler: mux}
+
+	go func() {
+		if err := srv.Serve(listener); err != http.ErrServerClosed {
+			log.WithError(err).Error("http server error")
+		}
+	}()
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+
+	baseURL := "http://" + addr
+
+	fmt.Printf("Model: %s\n", modelTag)
 	fmt.Println("Type your message and press Enter. /quit to exit, /clear to reset history.")
 	fmt.Println()
 
@@ -77,7 +139,6 @@ func run() error {
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
-	// Allow long pastes
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for {
@@ -104,12 +165,12 @@ func run() error {
 		history = append(history, message{Role: "user", Content: input})
 
 		reqBody, _ := json.Marshal(chatRequest{
-			Model:    "default",
+			Model:    modelTag,
 			Messages: history,
 			Stream:   true,
 		})
 
-		req, err := http.NewRequest("POST", baseURL+"/v1/chat/completions", bytes.NewReader(reqBody))
+		req, err := http.NewRequestWithContext(ctx, "POST", baseURL+"/v1/chat/completions", bytes.NewReader(reqBody))
 		if err != nil {
 			fmt.Printf("error: %v\n", err)
 			history = history[:len(history)-1]
