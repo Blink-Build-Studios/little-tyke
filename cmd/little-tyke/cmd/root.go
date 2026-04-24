@@ -8,6 +8,7 @@ import (
 
 	"github.com/Blink-Build-Studios/little-tyke/cmd/little-tyke/cmd/chat"
 	"github.com/Blink-Build-Studios/little-tyke/cmd/little-tyke/cmd/serve"
+	"github.com/Blink-Build-Studios/little-tyke/cmd/little-tyke/cmd/summarize"
 	"github.com/Blink-Build-Studios/little-tyke/cmd/little-tyke/cmd/version"
 )
 
@@ -30,6 +31,7 @@ func init() {
 
 	RootCmd.AddCommand(serve.Cmd)
 	RootCmd.AddCommand(chat.Cmd)
+	RootCmd.AddCommand(summarize.Cmd)
 	RootCmd.AddCommand(versionCmd)
 }
 

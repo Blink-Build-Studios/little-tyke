@@ -3,7 +3,7 @@ BUILD_DIR := build
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS   := -ldflags "-X github.com/Blink-Build-Studios/little-tyke/cmd/little-tyke/cmd/version.Version=$(VERSION)"
 
-.PHONY: build test lint vet tidy run chat chat-fast clean docker-build
+.PHONY: build test lint vet tidy run chat chat-fast summarize clean docker-build
 
 build:
 	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY) ./cmd/little-tyke
@@ -28,6 +28,9 @@ chat: build
 
 chat-fast: build
 	$(BUILD_DIR)/$(BINARY) chat --fast
+
+summarize: build
+	$(BUILD_DIR)/$(BINARY) summarize $(ARGS)
 
 clean:
 	rm -rf $(BUILD_DIR)
