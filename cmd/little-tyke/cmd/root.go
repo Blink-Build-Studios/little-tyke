@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/Blink-Build-Studios/little-tyke/cmd/little-tyke/cmd/chat"
 	"github.com/Blink-Build-Studios/little-tyke/cmd/little-tyke/cmd/serve"
 	"github.com/Blink-Build-Studios/little-tyke/cmd/little-tyke/cmd/version"
 )
@@ -28,6 +29,7 @@ func init() {
 	_ = viper.BindPFlag("config", pflags.Lookup("config"))
 
 	RootCmd.AddCommand(serve.Cmd)
+	RootCmd.AddCommand(chat.Cmd)
 	RootCmd.AddCommand(versionCmd)
 }
 
