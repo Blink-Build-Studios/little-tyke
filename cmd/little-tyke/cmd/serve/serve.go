@@ -147,12 +147,12 @@ func run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"status":"ok","model":"%s"}`, modelTag)
+		_, _ = fmt.Fprintf(w, `{"status":"ok","model":"%s"}`, modelTag)
 	})
 	mux.HandleFunc("/v1/chat/completions", handler.ServeHTTP)
 	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"object":"list","data":[{"id":"%s","object":"model","owned_by":"google"}]}`, modelTag)
+		_, _ = fmt.Fprintf(w, `{"object":"list","data":[{"id":"%s","object":"model","owned_by":"google"}]}`, modelTag)
 	})
 
 	srv := &http.Server{Addr: addr, Handler: mux}
