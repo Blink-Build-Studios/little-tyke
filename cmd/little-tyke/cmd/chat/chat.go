@@ -58,6 +58,9 @@ func init() {
 	flags.String("model", "", "override model tag")
 	_ = viper.BindPFlag("model", flags.Lookup("model"))
 
+	flags.Bool("fast", false, "use the smallest/fastest model")
+	_ = viper.BindPFlag("chat_fast", flags.Lookup("fast"))
+
 	flags.String("system", "", "system prompt")
 	_ = viper.BindPFlag("chat_system", flags.Lookup("system"))
 
@@ -111,7 +114,12 @@ func run(ctx context.Context) error {
 	modelTag := viper.GetString("model")
 	if modelTag == "" {
 		info := hardware.Detect()
-		sel := hardware.SelectModel(info)
+		var sel hardware.ModelSelection
+		if viper.GetBool("chat_fast") {
+			sel = hardware.FastModel(info)
+		} else {
+			sel = hardware.SelectModel(info)
+		}
 		modelTag = sel.Tag
 		status(colorGreen+"+"+colorReset, fmt.Sprintf("Model: %s%s%s", colorBold, sel.DisplayName, colorReset))
 		status(" ", fmt.Sprintf("%s%s%s", colorDim, sel.Reason, colorReset))

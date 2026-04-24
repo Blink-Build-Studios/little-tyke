@@ -97,12 +97,31 @@ func SelectModel(info Info) ModelSelection {
 		}
 	}
 
-	// Fallback: smallest model
+	// Fallback: fastest model
 	last := candidates[len(candidates)-1]
 	return ModelSelection{
 		Tag:         last.tag,
 		DisplayName: last.displayName,
 		SizeMB:      last.sizeMB,
 		Reason:      fmt.Sprintf("fallback to smallest model (%dMB available, model needs %dMB)", availMB, last.sizeMB),
+	}
+}
+
+// FastModel returns the smallest/fastest Gemma 4 model for the current platform.
+func FastModel(info Info) ModelSelection {
+	isAppleSilicon := info.OS == "darwin" && info.Arch == "arm64"
+	if isAppleSilicon {
+		return ModelSelection{
+			Tag:         "gemma4:e2b-it-q4_K_M",
+			DisplayName: "Gemma 4 E2B (Q4_K_M)",
+			SizeMB:      7373,
+			Reason:      "fastest model (--fast)",
+		}
+	}
+	return ModelSelection{
+		Tag:         "gemma4:e2b-it-q4_K_M",
+		DisplayName: "Gemma 4 E2B (Q4_K_M)",
+		SizeMB:      7373,
+		Reason:      "fastest model (--fast)",
 	}
 }
