@@ -16,13 +16,32 @@ import (
 
 // Handler serves OpenAI-compatible /v1/chat/completions requests.
 type Handler struct {
-	client *ollama.Client
-	model  string
+	client          *ollama.Client
+	model           string
+	keepAlive       string
+	defaultMaxToks  int
+	numCtx          int
 }
 
+// HandlerOption configures a Handler.
+type HandlerOption func(*Handler)
+
+// WithKeepAlive sets the Ollama keep_alive duration (e.g. "30m", "-1" for forever).
+func WithKeepAlive(d string) HandlerOption { return func(h *Handler) { h.keepAlive = d } }
+
+// WithDefaultMaxTokens sets the default max tokens if the caller doesn't specify.
+func WithDefaultMaxTokens(n int) HandlerOption { return func(h *Handler) { h.defaultMaxToks = n } }
+
+// WithNumCtx sets the context window size.
+func WithNumCtx(n int) HandlerOption { return func(h *Handler) { h.numCtx = n } }
+
 // NewHandler creates a proxy handler for the given model.
-func NewHandler(client *ollama.Client, model string) *Handler {
-	return &Handler{client: client, model: model}
+func NewHandler(client *ollama.Client, model string, opts ...HandlerOption) *Handler {
+	h := &Handler{client: client, model: model}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // --- OpenAI API types ---
@@ -303,35 +322,54 @@ func (h *Handler) toOllamaRequest(req *ChatCompletionRequest) *ollama.ChatReques
 	}
 
 	ollamaReq := &ollama.ChatRequest{
-		Model:    h.model,
-		Messages: messages,
+		Model:     h.model,
+		Messages:  messages,
+		KeepAlive: h.keepAlive,
 	}
 
 	if req.Tools != nil {
-		// Pass tools through directly — Ollama uses the same schema
 		toolsJSON, _ := json.Marshal(req.Tools)
 		var tools []any
 		_ = json.Unmarshal(toolsJSON, &tools)
 		ollamaReq.Tools = tools
 	}
 
-	if req.Temperature != nil || req.TopP != nil || req.MaxTokens != nil || req.Stop != nil {
-		opts := &ollama.Options{
-			Temperature: req.Temperature,
-			TopP:        req.TopP,
-		}
-		if req.MaxTokens != nil {
-			opts.NumPredict = req.MaxTokens
-		}
-		if stops, ok := req.Stop.([]any); ok {
-			for _, s := range stops {
-				if str, ok := s.(string); ok {
-					opts.Stop = append(opts.Stop, str)
-				}
+	// Build options — apply handler defaults, then caller overrides
+	opts := &ollama.Options{}
+	hasOpts := false
+
+	if h.numCtx > 0 {
+		opts.NumCtx = &h.numCtx
+		hasOpts = true
+	}
+	if req.MaxTokens != nil {
+		opts.NumPredict = req.MaxTokens
+		hasOpts = true
+	} else if h.defaultMaxToks > 0 {
+		opts.NumPredict = &h.defaultMaxToks
+		hasOpts = true
+	}
+	if req.Temperature != nil {
+		opts.Temperature = req.Temperature
+		hasOpts = true
+	}
+	if req.TopP != nil {
+		opts.TopP = req.TopP
+		hasOpts = true
+	}
+	if stops, ok := req.Stop.([]any); ok {
+		for _, s := range stops {
+			if str, ok := s.(string); ok {
+				opts.Stop = append(opts.Stop, str)
 			}
-		} else if stop, ok := req.Stop.(string); ok {
-			opts.Stop = []string{stop}
 		}
+		hasOpts = true
+	} else if stop, ok := req.Stop.(string); ok {
+		opts.Stop = []string{stop}
+		hasOpts = true
+	}
+
+	if hasOpts {
 		ollamaReq.Options = opts
 	}
 

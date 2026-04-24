@@ -60,6 +60,15 @@ func init() {
 
 	flags.String("sentry-environment", "", "Sentry environment (default: development)")
 	_ = viper.BindPFlag("sentry_environment", flags.Lookup("sentry-environment"))
+
+	flags.String("keep-alive", "30m", "how long Ollama keeps the model loaded after last request (e.g. 5m, 1h, -1 for forever)")
+	_ = viper.BindPFlag("keep_alive", flags.Lookup("keep-alive"))
+
+	flags.Int("default-max-tokens", 2048, "default max tokens per response (0 = unlimited)")
+	_ = viper.BindPFlag("default_max_tokens", flags.Lookup("default-max-tokens"))
+
+	flags.Int("num-ctx", 4096, "context window size (0 = model default)")
+	_ = viper.BindPFlag("num_ctx", flags.Lookup("num-ctx"))
 }
 
 func run(ctx context.Context) error {
@@ -150,7 +159,18 @@ func run(ctx context.Context) error {
 
 	// --- HTTP server ---
 	addr := viper.GetString("addr")
-	handler := proxy.NewHandler(client, modelTag)
+
+	var handlerOpts []proxy.HandlerOption
+	if ka := viper.GetString("keep_alive"); ka != "" {
+		handlerOpts = append(handlerOpts, proxy.WithKeepAlive(ka))
+	}
+	if mt := viper.GetInt("default_max_tokens"); mt > 0 {
+		handlerOpts = append(handlerOpts, proxy.WithDefaultMaxTokens(mt))
+	}
+	if nc := viper.GetInt("num_ctx"); nc > 0 {
+		handlerOpts = append(handlerOpts, proxy.WithNumCtx(nc))
+	}
+	handler := proxy.NewHandler(client, modelTag, handlerOpts...)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

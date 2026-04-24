@@ -153,7 +153,11 @@ func run(ctx context.Context) error {
 	}
 	addr := listener.Addr().String()
 
-	handler := proxy.NewHandler(client, modelTag)
+	handler := proxy.NewHandler(client, modelTag,
+		proxy.WithKeepAlive("-1"),
+		proxy.WithDefaultMaxTokens(2048),
+		proxy.WithNumCtx(4096),
+	)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", handler.ServeHTTP)
 	srv := &http.Server{Handler: mux}
@@ -182,10 +186,12 @@ func run(ctx context.Context) error {
 	var history []message
 	var systemMsg *message
 
-	if sys := viper.GetString("chat_system"); sys != "" {
-		sm := message{Role: "system", Content: sys}
-		systemMsg = &sm
+	sys := viper.GetString("chat_system")
+	if sys == "" {
+		sys = "Be concise and direct. Avoid filler words and unnecessary preamble."
 	}
+	sm := message{Role: "system", Content: sys}
+	systemMsg = &sm
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)

@@ -152,11 +152,12 @@ func (c *Client) PullModel(ctx context.Context, tag string) error {
 
 // ChatRequest is an Ollama /api/chat request.
 type ChatRequest struct {
-	Model    string        `json:"model"`
-	Messages []ChatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
-	Tools    []any         `json:"tools,omitempty"`
-	Options  *Options      `json:"options,omitempty"`
+	Model     string        `json:"model"`
+	Messages  []ChatMessage `json:"messages"`
+	Stream    bool          `json:"stream"`
+	Tools     []any         `json:"tools,omitempty"`
+	Options   *Options      `json:"options,omitempty"`
+	KeepAlive string        `json:"keep_alive,omitempty"`
 }
 
 // ChatMessage is a single message in a chat.
@@ -182,6 +183,7 @@ type Options struct {
 	Temperature *float64 `json:"temperature,omitempty"`
 	TopP        *float64 `json:"top_p,omitempty"`
 	NumPredict  *int     `json:"num_predict,omitempty"`
+	NumCtx      *int     `json:"num_ctx,omitempty"`
 	Stop        []string `json:"stop,omitempty"`
 }
 
